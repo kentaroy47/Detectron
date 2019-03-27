@@ -113,73 +113,81 @@ def parse_args():
     parser.add_argument(
         'im_or_folder', help='image or folder of images', default=None
     )
+    parser.add_argument(
+        '--target', dest='target', help='image or folder of images', default="jackson"
+    )
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(1)
     return parser.parse_args()
 
 
-def main(args):
-    logger = logging.getLogger(__name__)
 
-    merge_cfg_from_file(args.cfg)
-    cfg.NUM_GPUS = 1
-    args.weights = cache_url(args.weights, cfg.DOWNLOAD_CACHE)
-    assert_and_infer_cfg(cache_urls=False)
+workspace.GlobalInit(['caffe2', '--caffe2_log_level=0'])
+setup_logging(__name__)
+args = parse_args()
+#main(args)
 
-    assert not cfg.MODEL.RPN_ONLY, \
-        'RPN models are not supported'
-    assert not cfg.TEST.PRECOMPUTED_PROPOSALS, \
-        'Models that require precomputed proposals are not supported'
+logger = logging.getLogger(__name__)
 
-    model = infer_engine.initialize_model_from_cfg(args.weights)
-    dummy_coco_dataset = dummy_datasets.get_coco_dataset()
+merge_cfg_from_file(args.cfg)
+cfg.NUM_GPUS = 1
+args.weights = cache_url(args.weights, cfg.DOWNLOAD_CACHE)
+assert_and_infer_cfg(cache_urls=False)
 
-    if os.path.isdir(args.im_or_folder):
-        im_list = glob.iglob(args.im_or_folder + '/*.' + args.image_ext)
-    else:
-        im_list = [args.im_or_folder]
+assert not cfg.MODEL.RPN_ONLY, \
+    'RPN models are not supported'
+assert not cfg.TEST.PRECOMPUTED_PROPOSALS, \
+    'Models that require precomputed proposals are not supported'
 
-    for i, im_name in enumerate(im_list):
-        out_name = os.path.join(
-            args.output_dir, '{}'.format(os.path.basename(im_name) + '.' + args.output_ext)
+model = infer_engine.initialize_model_from_cfg(args.weights)
+dummy_coco_dataset = dummy_datasets.get_coco_dataset()
+
+if os.path.isdir(args.im_or_folder):
+    im_list = sorted(glob.iglob(args.im_or_folder + '/*.' + args.image_ext))
+else:
+    im_list = [args.im_or_folder]
+
+listbox = []
+listcls = []
+
+for i, im_name in enumerate(im_list):
+    out_name = os.path.join(
+        args.output_dir, '{}'.format(os.path.basename(im_name) + '.' + args.output_ext)
+    )
+    logger.info('Processing {} -> {}'.format(im_name, out_name))
+    im = cv2.imread(im_name)
+    timers = defaultdict(Timer)
+    t = time.time()
+    with c2_utils.NamedCudaScope(0):
+        cls_boxes, cls_segms, cls_keyps = infer_engine.im_detect_all(
+            model, im, None, timers=timers
         )
-        logger.info('Processing {} -> {}'.format(im_name, out_name))
-        im = cv2.imread(im_name)
-        timers = defaultdict(Timer)
-        t = time.time()
-        with c2_utils.NamedCudaScope(0):
-            cls_boxes, cls_segms, cls_keyps = infer_engine.im_detect_all(
-                model, im, None, timers=timers
-            )
-        logger.info('Inference time: {:.3f}s'.format(time.time() - t))
-        for k, v in timers.items():
-            logger.info(' | {}: {:.3f}s'.format(k, v.average_time))
-        if i == 0:
-            logger.info(
-                ' \ Note: inference on the first image will be slower than the '
-                'rest (caches and auto-tuning need to warm up)'
-            )
-        print(cls_boxes[0].shape)
-        vis_utils.vis_one_image(
-            im[:, :, ::-1],  # BGR -> RGB for visualization
-            im_name,
-            args.output_dir,
-            cls_boxes,
-            cls_segms,
-            cls_keyps,
-            dataset=dummy_coco_dataset,
-            box_alpha=0.3,
-            show_class=True,
-            thresh=args.thresh,
-            kp_thresh=args.kp_thresh,
-            ext=args.output_ext,
-            out_when_no_box=args.out_when_no_box)
+    logger.info('Inference time: {:.3f}s'.format(time.time() - t))
+    for k, v in timers.items():
+        logger.info(' | {}: {:.3f}s'.format(k, v.average_time))
+    if i == 0:
+        logger.info(
+            ' \ Note: inference on the first image will be slower than the '
+            'rest (caches and auto-tuning need to warm up)'
+        )
         
+    boxes, segms, keypoints, classes = vis_utils.convert_from_cls_format(
+            cls_boxes, cls_segms, cls_keyps)
+#    print("boxes", boxes)
+#    print("cls", classes)
+    listbox.append(boxes)
+    listcls.append(classes)
+  
+    
+import pickle
+outfile = 'output/detectron/' + args.target + '.pkl'
+with open(outfile, 'wb') as f:
+      pickle.dump(listbox, f, pickle.HIGHEST_PROTOCOL)
+      pickle.dump(listcls, f, pickle.HIGHEST_PROTOCOL)
+
+    
 
 
-if __name__ == '__main__':
-    workspace.GlobalInit(['caffe2', '--caffe2_log_level=0'])
-    setup_logging(__name__)
-    args = parse_args()
-    main(args)
+
+
