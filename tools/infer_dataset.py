@@ -144,7 +144,11 @@ model = infer_engine.initialize_model_from_cfg(args.weights)
 dummy_coco_dataset = dummy_datasets.get_coco_dataset()
 
 if os.path.isdir(args.im_or_folder):
-    im_list = sorted(glob.iglob(args.im_or_folder + '/*.' + args.image_ext))
+    im_list2 = sorted(glob.iglob(args.im_or_folder + '/*.' + args.image_ext))
+    im_list=[]
+    for im in im_list2:
+        if "val" not in im:
+            im_list.append(im)
 else:
     im_list = [args.im_or_folder]
 
